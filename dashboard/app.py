@@ -882,8 +882,8 @@ DASHBOARD_HTML = '''
             </div>
         </div>
 
-        <div class="alert-banner" id="stale-alert" style="background:#7f1d1d; border:1px solid #991b1b; color:#fecaca; padding:10px 15px; border-radius:8px; margin-bottom:10px; display:none; width:fit-content;">
-            <strong>⚠️ Stale Data:</strong> <span id="stale-text" style="margin-left: 8px;">Last poll was over 30 minutes ago</span>
+        <div class="alert-banner" id="stale-alert" style="background:#991b1b; border:1px solid #f87171; color:#fff; padding:16px 20px; border-radius:8px; margin-bottom:10px; display:none; font-size:17px; font-weight:700; text-align:center; width:fit-content;">
+            🚨 <strong style="color:#fecaca;">OUTAGE DETECTED</strong> &nbsp;·&nbsp; <span style="color:#fecaca; font-weight:600;">⚠️ Stale Data: Last updated <span id="stale-text">over 30 mins ago</span></span>
         </div>
         <div class="alert-banner" id="anomaly-alert">
             <strong>⚠️ Anomalies:</strong> <span id="anomaly-text" style="margin-left: 8px;"></span>
@@ -1045,6 +1045,37 @@ DASHBOARD_HTML = '''
             return `${diffSec}s ago`;
         }
 
+        // Pong bounce for the outage banner (bounces left/right across the viewport)
+        let staleBounceAnim = null;
+        let staleBouncePos = 0;
+        let staleBounceDir = 1;
+        const STALE_BOUNCE_SPEED = 170; // px per second
+
+        function startStaleBounce() {
+            const el = document.getElementById('stale-alert');
+            if (!el || staleBounceAnim) return;
+            staleBouncePos = 0;
+            staleBounceDir = 1;
+            let last = performance.now();
+            function frame(now) {
+                const dt = Math.min((now - last) / 1000, 0.05);
+                last = now;
+                const maxX = Math.max(0, window.innerWidth - el.offsetWidth - 12);
+                staleBouncePos += staleBounceDir * STALE_BOUNCE_SPEED * dt;
+                if (staleBouncePos >= maxX) { staleBouncePos = maxX; staleBounceDir = -1; }
+                if (staleBouncePos <= 0) { staleBouncePos = 0; staleBounceDir = 1; }
+                el.style.transform = 'translateX(' + staleBouncePos + 'px)';
+                staleBounceAnim = requestAnimationFrame(frame);
+            }
+            staleBounceAnim = requestAnimationFrame(frame);
+        }
+
+        function stopStaleBounce() {
+            if (staleBounceAnim) { cancelAnimationFrame(staleBounceAnim); staleBounceAnim = null; }
+            const el = document.getElementById('stale-alert');
+            if (el) el.style.transform = '';
+        }
+
         async function loadData() {
             const cb = () => '?t=' + Date.now();
             const summary = await fetch('/api/summary' + cb()).then(r => r.json()).catch(() => null);
@@ -1127,10 +1158,12 @@ DASHBOARD_HTML = '''
                 const staleMins = Math.floor(Math.abs((Date.now() - lastPoll)) / 60000);
                 const staleBanner = document.getElementById('stale-alert');
                 if (staleMins > 30) {
-                    document.getElementById('stale-text').textContent = `Last poll was ${staleMins} minutes ago`;
+                    document.getElementById('stale-text').textContent = `${staleMins} mins ago`;
                     staleBanner.style.display = 'block';
+                    startStaleBounce();
                 } else {
                     staleBanner.style.display = 'none';
+                    stopStaleBounce();
                 }
                 const indicator = document.getElementById('last-poll-indicator');
                 indicator.textContent = 'Poll: ' + relativeTime(lastPoll);
@@ -1141,6 +1174,7 @@ DASHBOARD_HTML = '''
                 window.pollInterval = setInterval(() => {
                     const m = Math.floor(Math.abs((Date.now() - lastPoll)) / 60000);
                     indicator.textContent = 'Poll: ' + relativeTime(lastPoll);
+                    document.getElementById('stale-text').textContent = m + ' mins ago';
                     if (m < 15) indicator.style.color = '#4ade80';
                     else if (m < 30) indicator.style.color = '#facc15';
                     else indicator.style.color = '#f87171';
