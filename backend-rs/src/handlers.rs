@@ -129,22 +129,31 @@ pub async fn api_summary(state: web::Data<AppState>) -> HttpResponse {
     HttpResponse::Ok().json(response)
 }
 
-pub async fn api_network_total(state: web::Data<AppState>) -> HttpResponse {
+pub async fn api_network_total(state: web::Data<AppState>, query: web::Query<HashMap<String, String>>) -> HttpResponse {
     let pool = &state.pool;
+
+    let raw = query.get("range").map(|s| s.as_str()).unwrap_or("30");
+    // Normalize: unknown values fall back to the 30-day arm AND the canonical
+    // "30" cache key, so arbitrary ?range= values cannot mint unbounded keys.
+    let (key, limit) = match raw {
+        "7" => ("7", Some(672)), // 7 days x 96 snapshots/day
+        "all" => ("all", None),  // no limit = full history
+        _ => ("30", Some(2880)), // 30 days x 96 snapshots/day
+    };
 
     {
         let cache = state.network_total_cache.lock().unwrap();
-        if let Some(ref cached) = *cache {
+        if let Some(ref cached) = cache.get(key) {
             if cached.at.elapsed().as_secs() < 30 {
                 return HttpResponse::Ok().json(&cached.data);
             }
         }
     }
 
-    match db::get_network_totals(pool, 2880).await {
+    match db::get_network_totals(pool, limit).await {
         Ok(data) => {
             let mut cache = state.network_total_cache.lock().unwrap();
-            *cache = Some(CachedResponse {
+            cache.insert(key.to_string(), CachedResponse {
                 data: data.clone(),
                 at: std::time::Instant::now(),
             });
