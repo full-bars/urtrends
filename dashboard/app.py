@@ -908,8 +908,8 @@ DASHBOARD_HTML = '''
         <div class="hero-chart-card">
             <h3 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;"><span>Network Total Over Time</span>
                 <select id="total-range" style="background:#1a1f26;color:#9ca3af;border:1px solid #2d3748;border-radius:6px;padding:4px 8px;font-size:12px;">
-                    <option value="all">All Time</option>
-                    <option value="30" selected>Last 30 Days</option>
+                    <option value="all" selected>All Time</option>
+                    <option value="30">Last 30 Days</option>
                     <option value="7">Last 7 Days</option>
                 </select>
             </h3>
@@ -1053,7 +1053,7 @@ DASHBOARD_HTML = '''
         let week1Chart, week2Chart, week3Chart, week4Chart;
         let refreshInterval, liveTickerInterval;
         let countryMap = {}; // Maps country names and codes to codes
-        let totalRange = (document.getElementById('total-range')?.value) || '30'; // 7 | 30 | all; init from DOM so Firefox bfcache restores don't desync
+        let totalRange = (document.getElementById('total-range')?.value) || 'all'; // 7 | 30 | all; init from DOM so Firefox bfcache restores don't desync
         let lastSummary = null;
         let rangeSeq = 0; // guards against stale range fetches overwriting newer ones
 
