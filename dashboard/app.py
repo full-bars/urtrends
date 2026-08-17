@@ -1662,9 +1662,14 @@ DASHBOARD_HTML = '''
         initializeComparison().then(() => updateComparison());
         startRefreshTimer();
     </script>
-</body>
-</html>
-'''
+    <div id="server-badge" style="position:fixed;bottom:8px;right:8px;background:#1a1a1a;color:#888;font-size:10px;padding:3px 8px;border-radius:4px;font-family:monospace;z-index:9999"></div>
+    <script>
+    fetch("/_host").then(r=>r.text()).then(h=>{
+      document.getElementById("server-badge").textContent = "Serving: " + h;
+    }).catch(()=>{})
+    </script>
+    </body>
+    </html>'''
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5000, debug=False)
