@@ -118,7 +118,13 @@
         </div>
 
         <div class="hero-chart-card">
-            <h3><span>Network Total Over Time</span></h3>
+            <h3 style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;"><span>Network Total Over Time</span>
+                <select id="total-range" style="background:#1a1f26;color:#9ca3af;border:1px solid #2d3748;border-radius:6px;padding:4px 8px;font-size:12px;">
+                    <option value="all" selected>All Time</option>
+                    <option value="30">Last 30 Days</option>
+                    <option value="7">Last 7 Days</option>
+                </select>
+            </h3>
             <div class="chart-container"><canvas id="totalChart"></canvas></div>
         </div>
 
@@ -265,6 +271,9 @@
         let week1Chart, week2Chart, week3Chart, week4Chart;
         let refreshInterval, liveTickerInterval;
         let countryMap = {}; // Maps country names and codes to codes
+        let totalRange = (document.getElementById('total-range')?.value) || 'all'; // 7 | 30 | all; init from DOM so Firefox bfcache restores don't desync
+        let lastSummary = null;
+        let rangeSeq = 0; // guards against stale range fetches overwriting newer ones
 
         function relativeTime(date) {
             const now = new Date();
@@ -313,6 +322,7 @@
         async function loadData() {
             const cb = () => '?t=' + Date.now();
             const summary = await fetch('/api/summary' + cb()).then(r => r.json()).catch(() => null);
+            lastSummary = summary;
             const networkTotal = await fetch('/api/network_total' + cb()).then(r => r.json()).catch(() => null);
             const moversDetail = await fetch('/api/movers-detailed' + cb()).then(r => r.json()).catch(() => ({}));
 
@@ -485,71 +495,11 @@
                 document.getElementById('atl-date').textContent = atlDate.toLocaleDateString('en-US', {month:'short', day:'numeric', year:'2-digit'}) + ' (' + relativeTime(atlDate) + ')';
             }
 
-            if (totalChart) totalChart.destroy();
-            const totalLabels = networkTotal.map(d => {
-                const dt = new Date(d.timestamp);
-                const h = dt.getHours() % 12 || 12;
-                const min = dt.getMinutes().toString().padStart(2, '0');
-                const short = `${dt.getMonth()+1}/${dt.getDate()} ${h}:${min}`;
-                const full = `${dt.toLocaleDateString()} ${dt.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}`;
-                return { short, full, timestamp: d.timestamp };
-            });
-            const n = networkTotal.length;
-            const athDataset = summary.ath ? [{
-                label: `ATH ${summary.ath.value.toLocaleString()}`,
-                data: Array(n).fill(summary.ath.value),
-                borderColor: 'rgba(245, 158, 11, 0.5)',
-                borderDash: [4, 4],
-                borderWidth: 1,
-                pointRadius: 0,
-                fill: false,
-                order: 10
-            }] : [];
-            const atlDataset = summary.atl ? [{
-                label: `ATL ${summary.atl.value.toLocaleString()}`,
-                data: Array(n).fill(summary.atl.value),
-                borderColor: 'rgba(248, 113, 113, 0.45)',
-                borderDash: [4, 4],
-                borderWidth: 1,
-                pointRadius: 0,
-                fill: false,
-                order: 10
-            }] : [];
-            totalChart = new Chart(document.getElementById('totalChart'), {
-                type: 'line',
-                data: {
-                    labels: totalLabels.map(l => l.short),
-                    datasets: [{
-                        label: 'Total Providers',
-                        data: networkTotal.map(d => d.total),
-                        borderColor: '#4ade80',
-                        backgroundColor: 'rgba(74, 222, 128, 0.1)',
-                        tension: 0.3,
-                        fill: true,
-                        pointRadius: 1,
-                        pointHoverRadius: 5
-                    }, {
-                        label: '24h MA',
-                        data: networkTotal.map(d => d.ma),
-                        borderColor: '#9ca3af',
-                        borderDash: [5, 5],
-                        borderWidth: 1,
-                        pointRadius: 0,
-                        fill: false
-                    }, ...athDataset, ...atlDataset]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: { mode: 'index', intersect: false },
-                    plugins: {
-                        legend: { display: true, labels: { color: '#9ca3af', filter: item => item.text !== '' } },
-                        filler: { propagate: true },
-                        tooltip: { callbacks: { title: ctx => totalLabels[ctx[0].dataIndex]?.full } }
-                    },
-                    scales: { y: { ticks: { color: '#9ca3af' }, grid: { color: '#2d3748' } }, x: { ticks: { color: '#9ca3af', maxTicksLimit: 24 }, grid: { display: false } } }
-                }
-            });
+            if (totalRange === '30') {
+                renderTotalChart(networkTotal);
+            } else {
+                loadRangeChart(totalRange);
+            }
 
             function drawMiniChart(chartVar, canvasId, sliceData, color) {
                 if (chartVar) chartVar.destroy();
@@ -820,6 +770,96 @@
             });
         }
 
+        // Build the Network Total chart from a given dataset (any range)
+        function renderTotalChart(networkTotal) {
+            if (!Array.isArray(networkTotal)) return;
+            if (totalChart) totalChart.destroy();
+            const totalLabels = networkTotal.map(d => {
+                const dt = new Date(d.timestamp);
+                const h = dt.getHours() % 12 || 12;
+                const min = dt.getMinutes().toString().padStart(2, '0');
+                const short = `${dt.getMonth()+1}/${dt.getDate()} ${h}:${min}`;
+                const full = `${dt.toLocaleDateString()} ${dt.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}`;
+                return { short, full, timestamp: d.timestamp };
+            });
+            const n = networkTotal.length;
+            const summary = lastSummary;
+            const athDataset = summary && summary.ath ? [{
+                label: `ATH ${summary.ath.value.toLocaleString()}`,
+                data: Array(n).fill(summary.ath.value),
+                borderColor: 'rgba(245, 158, 11, 0.5)',
+                borderDash: [4, 4],
+                borderWidth: 1,
+                pointRadius: 0,
+                fill: false,
+                order: 10
+            }] : [];
+            const atlDataset = summary && summary.atl ? [{
+                label: `ATL ${summary.atl.value.toLocaleString()}`,
+                data: Array(n).fill(summary.atl.value),
+                borderColor: 'rgba(248, 113, 113, 0.45)',
+                borderDash: [4, 4],
+                borderWidth: 1,
+                pointRadius: 0,
+                fill: false,
+                order: 10
+            }] : [];
+            totalChart = new Chart(document.getElementById('totalChart'), {
+                type: 'line',
+                data: {
+                    labels: totalLabels.map(l => l.short),
+                    datasets: [{
+                        label: 'Total Providers',
+                        data: networkTotal.map(d => d.total),
+                        borderColor: '#4ade80',
+                        backgroundColor: 'rgba(74, 222, 128, 0.1)',
+                        tension: 0.3,
+                        fill: true,
+                        pointRadius: 1,
+                        pointHoverRadius: 5
+                    }, {
+                        label: '24h MA',
+                        data: networkTotal.map(d => d.ma),
+                        borderColor: '#9ca3af',
+                        borderDash: [5, 5],
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        fill: false
+                    }, ...athDataset, ...atlDataset]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: true, labels: { color: '#9ca3af', filter: item => item.text !== '' } },
+                        filler: { propagate: true },
+                        tooltip: { callbacks: { title: ctx => totalLabels[ctx[0].dataIndex]?.full } }
+                    },
+                    scales: { y: { ticks: { color: '#9ca3af' }, grid: { color: '#2d3748' } }, x: { ticks: { color: '#9ca3af', maxTicksLimit: 24 }, grid: { display: false } } }
+                }
+            });
+        }
+
+        async function loadRangeChart(range) {
+            const seq = ++rangeSeq;
+            const cb = () => '&t=' + Date.now();
+            if (!lastSummary) {
+                const s = await fetch('/api/summary?t=' + Date.now()).then(r => r.json()).catch(() => null);
+                if (s) lastSummary = s;
+            }
+            const res = await fetch('/api/network_total?range=' + encodeURIComponent(range) + cb());
+            if (seq !== rangeSeq || !res.ok) return; // superseded by a newer range change, or request failed
+            const data = await res.json().catch(() => null);
+            if (seq !== rangeSeq || !Array.isArray(data) || range !== totalRange) return;
+            renderTotalChart(data);
+        }
+
+        document.getElementById('total-range').addEventListener('change', function () {
+            totalRange = this.value;
+            loadRangeChart(totalRange);
+        });
+
         renderComparisonInputs();
 
         function startRefreshTimer() {
@@ -843,5 +883,11 @@
 <div style="position:fixed;bottom:8px;left:8px;background:#1a1a1a;color:#888;font-size:10px;padding:3px 8px;border-radius:4px;font-family:monospace;z-index:9999">
     <a href="https://github.com/full-bars/provider-tracking" target="_blank" style="color:#4a9eff;text-decoration:none;">Self-host</a>
 </div>
+<div id="server-badge" style="position:fixed;bottom:8px;right:8px;background:#1a1a1a;color:#888;font-size:10px;padding:3px 8px;border-radius:4px;font-family:monospace;z-index:9999"></div>
+<script>
+fetch("/_host").then(r=>r.text()).then(h=>{
+  document.getElementById("server-badge").textContent = "Serving: " + h;
+}).catch(()=>{})
+</script>
 </body>
 </html>
