@@ -260,7 +260,7 @@
         </div>
     </div>
     <div style="background:#1a1f26;border-top:1px solid #2d3748;padding:12px 20px;text-align:center;font-size:12px;color:#9ca3af;">
-        <a href="https://github.com/full-bars/provider-tracking" target="_blank" style="color:#4a9eff;text-decoration:none;">Provider Tracker</a>
+        <a href="https://github.com/full-bars/urtrends" target="_blank" style="color:#4a9eff;text-decoration:none;">Provider Tracker</a>
         made by
         <a href="https://github.com/full-bars" target="_blank" style="color:#4a9eff;text-decoration:none;">full-bars</a>
         / onlyinthe707 (Mesocyclone)
@@ -274,6 +274,43 @@
         let totalRange = (document.getElementById('total-range')?.value) || 'all'; // 7 | 30 | all; init from DOM so Firefox bfcache restores don't desync
         let lastSummary = null;
         let rangeSeq = 0; // guards against stale range fetches overwriting newer ones
+        // Adaptive point budget: benchmark this device once, cache for a week.
+        let DEVICE_MAX_POINTS = null;
+        const PT_KEY = 'urtrends.max_points';
+        const PT_CACHE_MS = 7 * 24 * 3600 * 1000;
+
+        async function resolveMaxPoints() {
+            const now = Date.now();
+            try {
+                const raw = localStorage.getItem(PT_KEY);
+                if (raw) {
+                    const { v, at } = JSON.parse(raw);
+                    if (v >= 100 && v <= 1000000 && now - at < PT_CACHE_MS) return v;
+                }
+            } catch (e) { /* privacy mode or corrupt entry: re-benchmark */ }
+            let budget = 2000;
+            try {
+                const canvas = document.createElement('canvas');
+                const probe = new Chart(canvas, {
+                    type: 'line',
+                    data: {
+                        labels: Array.from({ length: 500 }, (_, i) => String(i)),
+                        datasets: [{ data: Array.from({ length: 500 }, (_, i) => Math.sin(i / 9) * 100 + i % 7) }]
+                    },
+                    options: { animation: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: false } } }
+                });
+                const t0 = performance.now();
+                probe.update();
+                const msPer500 = performance.now() - t0;
+                probe.destroy();
+                budget = Math.round((150 / msPer500) * 500);
+                budget = Math.max(200, Math.min(2000, budget));
+            } catch (e) { /* Chart.js unavailable: keep default */ }
+            try {
+                localStorage.setItem(PT_KEY, JSON.stringify({ v: budget, at: now }));
+            } catch (e) { /* privacy mode: skip persistence */ }
+            return budget;
+        }
 
         function relativeTime(date) {
             const now = new Date();
@@ -321,9 +358,12 @@
 
         async function loadData() {
             const cb = () => '?t=' + Date.now();
+            if (DEVICE_MAX_POINTS === null) DEVICE_MAX_POINTS = await resolveMaxPoints();
             const summary = await fetch('/api/summary' + cb()).then(r => r.json()).catch(() => null);
             lastSummary = summary;
-            const networkTotal = await fetch('/api/network_total' + cb()).then(r => r.json()).catch(() => null);
+            // This 30-day fetch must stay full resolution: the weekly mini-charts
+            // slice it positionally. The hero chart gets its budget in loadRangeChart.
+            const networkTotal = await fetch('/api/network_total?max_points=999999' + cb()).then(r => r.json()).catch(() => null);
             const moversDetail = await fetch('/api/movers-detailed' + cb()).then(r => r.json()).catch(() => ({}));
 
             // Build country name → code mapping from movers data
@@ -844,11 +884,12 @@
         async function loadRangeChart(range) {
             const seq = ++rangeSeq;
             const cb = () => '&t=' + Date.now();
+            if (DEVICE_MAX_POINTS === null) DEVICE_MAX_POINTS = await resolveMaxPoints();
             if (!lastSummary) {
                 const s = await fetch('/api/summary?t=' + Date.now()).then(r => r.json()).catch(() => null);
                 if (s) lastSummary = s;
             }
-            const res = await fetch('/api/network_total?range=' + encodeURIComponent(range) + cb());
+            const res = await fetch('/api/network_total?range=' + encodeURIComponent(range) + '&max_points=' + DEVICE_MAX_POINTS + cb());
             if (seq !== rangeSeq || !res.ok) return; // superseded by a newer range change, or request failed
             const data = await res.json().catch(() => null);
             if (seq !== rangeSeq || !Array.isArray(data) || range !== totalRange) return;
@@ -881,7 +922,7 @@
         startRefreshTimer();
     </script>
 <div style="position:fixed;bottom:8px;left:8px;background:#1a1a1a;color:#888;font-size:10px;padding:3px 8px;border-radius:4px;font-family:monospace;z-index:9999">
-    <a href="https://github.com/full-bars/provider-tracking" target="_blank" style="color:#4a9eff;text-decoration:none;">Self-host</a>
+    <a href="https://github.com/full-bars/urtrends" target="_blank" style="color:#4a9eff;text-decoration:none;">Self-host</a>
 </div>
 <div id="server-badge" style="position:fixed;bottom:8px;right:8px;background:#1a1a1a;color:#888;font-size:10px;padding:3px 8px;border-radius:4px;font-family:monospace;z-index:9999"></div>
 <script>

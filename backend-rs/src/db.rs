@@ -1,5 +1,5 @@
 use sqlx::SqlitePool;
-use chrono::Duration;
+use chrono::{Duration, NaiveDateTime};
 use anyhow::Result;
 use crate::models::*;
 
@@ -39,7 +39,11 @@ pub async fn get_top_countries(pool: &SqlitePool, timestamp: &str, limit: i64) -
     Ok(rows)
 }
 
-pub async fn get_network_totals(pool: &SqlitePool, limit: Option<i64>) -> Result<Vec<NetworkTotal>> {
+pub async fn get_network_totals(
+    pool: &SqlitePool,
+    limit: Option<i64>,
+    max_points: Option<i64>,
+) -> Result<Vec<NetworkTotal>> {
     let rows = if let Some(limit) = limit {
         sqlx::query_as::<_, NetworkTotal>(
             "SELECT timestamp, SUM(provider_count) as total, NULL as ma FROM provider_counts
@@ -60,13 +64,23 @@ pub async fn get_network_totals(pool: &SqlitePool, limit: Option<i64>) -> Result
     let mut result = rows;
     result.reverse();
 
-    // Calculate 24-hour moving average
-    let window = 24;
+    // Calculate 24-hour moving average.
+    // 96 points x 15 min = 1440 min = 24h. Was 24 points = 6h, mislabeled as 24h.
+    let window = 96;
     for i in 0..result.len() {
         let start = if i >= window { i - window + 1 } else { 0 };
         let sum: i32 = result[start..=i].iter().map(|r| r.total).sum();
         let count = (i - start + 1) as i32;
         result[i].ma = Some((sum as f64 / count as f64).round() as i32);
+    }
+
+    // Downsample with LTTB when the point budget is smaller than the series.
+    // MA stays aligned because it rides the same picked indices.
+    if let Some(n) = max_points {
+        let n = n as usize;
+        if n >= 2 && result.len() > n {
+            return Ok(downsample_network_totals(&result, n));
+        }
     }
 
     Ok(result)
@@ -299,4 +313,77 @@ pub async fn get_anomalies(
     losses.sort_by(|a, b| b.percent_change.abs().partial_cmp(&a.percent_change.abs()).unwrap());
 
     Ok((gains, losses))
+}
+
+/// Parse "YYYY-MM-DD HH:MM:SS" (naive UTC) into epoch minutes.
+fn parse_epoch_minutes(ts: &str) -> Option<i64> {
+    NaiveDateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .map(|dt| dt.timestamp() / 60)
+}
+
+/// LTTB: pick n indices from (xs, ys), always keeping first and last.
+/// The interior splits into equal-sized buckets. In each bucket, keep the
+/// point whose triangle with the previous pick and the NEXT bucket's average
+/// has the largest area. This preserves peaks and overall trend shape.
+/// x is in minutes since the first point; y is the raw total.
+fn lttb_picks(n: usize, xs: &[f64], ys: &[i32]) -> Vec<usize> {
+    let len = xs.len();
+    let mut picks = Vec::with_capacity(n);
+    picks.push(0);
+    let bucket_size = (len - 2) as f64 / (n - 2) as f64;
+    let mut prev = 0usize;
+    for i in 0..n - 2 {
+        // Average of the next bucket, the right anchor of the triangle.
+        let avg_start = ((i + 1) as f64 * bucket_size).floor() as usize + 1;
+        let mut avg_end = (((i + 2) as f64 * bucket_size).floor() as usize + 1).min(len);
+        if avg_end <= avg_start {
+            avg_end = avg_start + 1;
+        }
+        let avg_x: f64 = xs[avg_start..avg_end].iter().sum::<f64>() / (avg_end - avg_start) as f64;
+        let avg_y: f64 =
+            ys[avg_start..avg_end].iter().sum::<i32>() as f64 / (avg_end - avg_start) as f64;
+
+        // Current bucket: keep the point with the largest triangle area.
+        let range_start = (i as f64 * bucket_size).floor() as usize + 1;
+        let mut range_end = (((i + 1) as f64 * bucket_size).floor() as usize + 1).min(len);
+        if range_end <= range_start {
+            range_end = range_start + 1;
+        }
+        let (ax, ay) = (xs[prev], ys[prev] as f64);
+        let mut best = range_start;
+        let mut best_area = -1.0f64;
+        for j in range_start..range_end {
+            let area =
+                ((ax - avg_x) * (ys[j] as f64 - ay) - (ax - xs[j]) * (avg_y - ay)).abs();
+            if area > best_area {
+                best_area = area;
+                best = j;
+            }
+        }
+        picks.push(best);
+        prev = best;
+    }
+    picks.push(len - 1);
+    picks
+}
+
+/// Apply LTTB to the series. MA (if any) rides along on the same picks.
+/// On any timestamp parse failure, return the series unchanged: never drop
+/// points we cannot place on the time axis.
+fn downsample_network_totals(result: &[NetworkTotal], n: usize) -> Vec<NetworkTotal> {
+    let first_min = match parse_epoch_minutes(&result[0].timestamp) {
+        Some(m) => m,
+        None => return result.to_vec(),
+    };
+    let mut xs = Vec::with_capacity(result.len());
+    for r in result.iter() {
+        match parse_epoch_minutes(&r.timestamp) {
+            Some(m) => xs.push((m - first_min) as f64),
+            None => return result.to_vec(),
+        }
+    }
+    let ys: Vec<i32> = result.iter().map(|r| r.total).collect();
+    let picks = lttb_picks(n, &xs, &ys);
+    picks.into_iter().map(|i| result[i].clone()).collect()
 }

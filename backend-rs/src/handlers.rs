@@ -129,6 +129,20 @@ pub async fn api_summary(state: web::Data<AppState>) -> HttpResponse {
     HttpResponse::Ok().json(response)
 }
 
+/// Fixed budget set for ?max_points=. Floors to the largest bucket <= v, so
+/// the public parameter can only mint a tiny number of distinct cache keys.
+const MAX_POINTS_BUCKETS: [i64; 6] = [500, 1000, 1500, 2000, 3000, 5000];
+
+fn quantize_max_points(v: i64) -> i64 {
+    let mut q = MAX_POINTS_BUCKETS[0];
+    for b in MAX_POINTS_BUCKETS.iter() {
+        if v >= *b {
+            q = *b;
+        }
+    }
+    q
+}
+
 pub async fn api_network_total(state: web::Data<AppState>, query: web::Query<HashMap<String, String>>) -> HttpResponse {
     let pool = &state.pool;
 
@@ -141,19 +155,29 @@ pub async fn api_network_total(state: web::Data<AppState>, query: web::Query<Has
         _ => ("30", Some(2880)), // 30 days x 96 snapshots/day
     };
 
+    // Point budget. Quantize so ?max_points= cannot mint unbounded cache
+    // keys either, mirroring the canonical-range fix above.
+    let raw_mp = query
+        .get("max_points")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(2000)
+        .clamp(100, 1_000_000);
+    let max_points = quantize_max_points(raw_mp);
+    let cache_key = format!("{}|{}", key, max_points);
+
     {
         let cache = state.network_total_cache.lock().unwrap();
-        if let Some(ref cached) = cache.get(key) {
+        if let Some(ref cached) = cache.get(&cache_key) {
             if cached.at.elapsed().as_secs() < 30 {
                 return HttpResponse::Ok().json(&cached.data);
             }
         }
     }
 
-    match db::get_network_totals(pool, limit).await {
+    match db::get_network_totals(pool, limit, Some(max_points)).await {
         Ok(data) => {
             let mut cache = state.network_total_cache.lock().unwrap();
-            cache.insert(key.to_string(), CachedResponse {
+            cache.insert(cache_key, CachedResponse {
                 data: data.clone(),
                 at: std::time::Instant::now(),
             });

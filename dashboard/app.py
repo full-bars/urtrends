@@ -233,6 +233,67 @@ def api_summary():
         'atl': {'value': atl_value, 'timestamp': atl_timestamp},
     })
 
+MAX_POINTS_BUCKETS = [500, 1000, 1500, 2000, 3000, 5000]
+
+
+def quantize_max_points(v):
+    q = MAX_POINTS_BUCKETS[0]
+    for b in MAX_POINTS_BUCKETS:
+        if v >= b:
+            q = b
+    return q
+
+
+def _lttb_picks(xs, ys, n):
+    if n >= len(xs) or n < 2:
+        return list(range(len(xs)))
+    picks = [0]
+    bucket_size = (len(xs) - 2) / (n - 2)
+    prev = 0
+    for i in range(n - 2):
+        avg_start = int((i + 1) * bucket_size) + 1
+        avg_end = min(int((i + 2) * bucket_size) + 1, len(xs))
+        if avg_end <= avg_start:
+            avg_end = avg_start + 1
+        avg_x = sum(xs[avg_start:avg_end]) / (avg_end - avg_start)
+        avg_y = sum(ys[avg_start:avg_end]) / (avg_end - avg_start)
+        range_start = int(i * bucket_size) + 1
+        range_end = min(int((i + 1) * bucket_size) + 1, len(xs))
+        if range_end <= range_start:
+            range_end = range_start + 1
+        ax, ay = xs[prev], ys[prev]
+        best, best_area = range_start, -1.0
+        for j in range(range_start, range_end):
+            area = abs((ax - avg_x) * (ys[j] - ay) - (ax - xs[j]) * (avg_y - ay))
+            if area > best_area:
+                best_area, best = area, j
+        picks.append(best)
+        prev = best
+    picks.append(len(xs) - 1)
+    return picks
+
+
+def downsample_network_totals(data, n):
+    def epoch_minutes(ts):
+        try:
+            return int(datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').timestamp() // 60)
+        except ValueError:
+            return None
+
+    first_min = epoch_minutes(data[0]['timestamp'])
+    if first_min is None:
+        return data
+    xs = []
+    for row in data:
+        m = epoch_minutes(row['timestamp'])
+        if m is None:
+            return data
+        xs.append(float(m - first_min))
+    ys = [row['total'] for row in data]
+    picks = _lttb_picks(xs, ys, n)
+    return [data[i] for i in picks]
+
+
 @app.route('/api/network_total')
 def api_network_total():
     conn = get_db()
@@ -263,11 +324,18 @@ def api_network_total():
     data = [{'timestamp': row[0], 'total': row[1]} for row in cursor.fetchall()]
     data.reverse()
 
-    # Add 24-hour moving average
-    window = 24
+    # Add 24-hour moving average (96 points x 15 min = 1440 min = 24h)
+    window = 96
     for i, row in enumerate(data):
         start = max(0, i - window + 1)
         row['ma'] = round(sum(d['total'] for d in data[start:i+1]) / (i - start + 1))
+
+    # Point budget: quantize so ?max_points= cannot mint unbounded state
+    raw_mp = request.args.get('max_points', 2000, type=int)
+    raw_mp = max(100, min(1000000, raw_mp))
+    max_points = quantize_max_points(raw_mp)
+    if len(data) > max_points:
+        data = downsample_network_totals(data, max_points)
 
     conn.close()
     return jsonify(data)
@@ -1056,6 +1124,43 @@ DASHBOARD_HTML = '''
         let totalRange = (document.getElementById('total-range')?.value) || 'all'; // 7 | 30 | all; init from DOM so Firefox bfcache restores don't desync
         let lastSummary = null;
         let rangeSeq = 0; // guards against stale range fetches overwriting newer ones
+        // Adaptive point budget: benchmark this device once, cache for a week.
+        let DEVICE_MAX_POINTS = null;
+        const PT_KEY = 'urtrends.max_points';
+        const PT_CACHE_MS = 7 * 24 * 3600 * 1000;
+
+        async function resolveMaxPoints() {
+            const now = Date.now();
+            try {
+                const raw = localStorage.getItem(PT_KEY);
+                if (raw) {
+                    const { v, at } = JSON.parse(raw);
+                    if (v >= 100 && v <= 1000000 && now - at < PT_CACHE_MS) return v;
+                }
+            } catch (e) { /* privacy mode or corrupt entry: re-benchmark */ }
+            let budget = 2000;
+            try {
+                const canvas = document.createElement('canvas');
+                const probe = new Chart(canvas, {
+                    type: 'line',
+                    data: {
+                        labels: Array.from({ length: 500 }, (_, i) => String(i)),
+                        datasets: [{ data: Array.from({ length: 500 }, (_, i) => Math.sin(i / 9) * 100 + i % 7) }]
+                    },
+                    options: { animation: false, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { display: false } } }
+                });
+                const t0 = performance.now();
+                probe.update();
+                const msPer500 = performance.now() - t0;
+                probe.destroy();
+                budget = Math.round((150 / msPer500) * 500);
+                budget = Math.max(200, Math.min(2000, budget));
+            } catch (e) { /* Chart.js unavailable: keep default */ }
+            try {
+                localStorage.setItem(PT_KEY, JSON.stringify({ v: budget, at: now }));
+            } catch (e) { /* privacy mode: skip persistence */ }
+            return budget;
+        }
 
         function relativeTime(date) {
             const now = new Date();
@@ -1103,9 +1208,12 @@ DASHBOARD_HTML = '''
 
         async function loadData() {
             const cb = () => '?t=' + Date.now();
+            if (DEVICE_MAX_POINTS === null) DEVICE_MAX_POINTS = await resolveMaxPoints();
             const summary = await fetch('/api/summary' + cb()).then(r => r.json()).catch(() => null);
             lastSummary = summary;
-            const networkTotal = await fetch('/api/network_total' + cb()).then(r => r.json()).catch(() => null);
+            // This 30-day fetch must stay full resolution: the weekly mini-charts
+            // slice it positionally. The hero chart gets its budget in loadRangeChart.
+            const networkTotal = await fetch('/api/network_total?max_points=999999' + cb()).then(r => r.json()).catch(() => null);
             const moversDetail = await fetch('/api/movers-detailed' + cb()).then(r => r.json()).catch(() => ({}));
 
             // Build country name → code mapping from movers data
@@ -1626,11 +1734,12 @@ DASHBOARD_HTML = '''
         async function loadRangeChart(range) {
             const seq = ++rangeSeq;
             const cb = () => '&t=' + Date.now();
+            if (DEVICE_MAX_POINTS === null) DEVICE_MAX_POINTS = await resolveMaxPoints();
             if (!lastSummary) {
                 const s = await fetch('/api/summary?t=' + Date.now()).then(r => r.json()).catch(() => null);
                 if (s) lastSummary = s;
             }
-            const res = await fetch('/api/network_total?range=' + encodeURIComponent(range) + cb());
+            const res = await fetch('/api/network_total?range=' + encodeURIComponent(range) + '&max_points=' + DEVICE_MAX_POINTS + cb());
             if (seq !== rangeSeq || !res.ok) return; // superseded by a newer range change, or request failed
             const data = await res.json().catch(() => null);
             if (seq !== rangeSeq || !Array.isArray(data) || range !== totalRange) return;
