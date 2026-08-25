@@ -32,7 +32,7 @@ Both backends are fully functional and produce identical results. Choose based o
 |---------|---------|---------|
 | **Memory Usage** | ~50-100 MB | ~4-5 MB |
 | **Startup Time** | ~1-2s | <100ms |
-| **Setup** | Python 3.9+ | Rust 1.70+ (or [pre-built binary](https://github.com/full-bars/provider-tracking/releases)) |
+| **Setup** | Python 3.9+ | Rust 1.70+ (or [pre-built binary](https://github.com/full-bars/urtrends/releases)) |
 | **Dependencies** | Minimal (Flask, requests) | Zero runtime dependencies |
 | **Performance** | Good | Excellent |
 | **Recommended For** | Quick setup, development | Production, resource-constrained environments |
@@ -51,8 +51,8 @@ Pre-built Rust binaries are published on GitHub Releases when a version tag is p
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/full-bars/provider-tracking.git
-cd provider-tracking
+git clone https://github.com/full-bars/urtrends.git
+cd urtrends
 ```
 
 2. Create database directory:
@@ -91,8 +91,8 @@ Dashboard available at `http://localhost:5000`
 **Option 2a: Use pre-built binary**
 ```bash
 # Download binary from latest release
-LATEST_TAG=$(curl -s https://api.github.com/repos/full-bars/provider-tracking/releases/latest | grep tag_name | cut -d '"' -f 4)
-wget -O provider_tracker https://github.com/full-bars/provider-tracking/releases/download/${LATEST_TAG}/provider_tracker
+LATEST_TAG=$(curl -s https://api.github.com/repos/full-bars/urtrends/releases/latest | grep tag_name | cut -d '"' -f 4)
+wget -O provider_tracker https://github.com/full-bars/urtrends/releases/download/${LATEST_TAG}/provider_tracker
 chmod +x provider_tracker
 sudo cp provider_tracker /home/user/provider_tracking/
 
