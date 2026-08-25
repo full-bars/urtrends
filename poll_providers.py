@@ -51,7 +51,7 @@ def init_db():
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS ath_atl (
-            metric_type TEXT PRIMARY KEY,
+            type TEXT PRIMARY KEY,
             value INTEGER NOT NULL,
             timestamp TEXT NOT NULL
         )
@@ -114,23 +114,27 @@ def store_data(data):
     conn.close()
 
 def update_ath_atl(cursor, current_total, timestamp):
-    cursor.execute("SELECT value, timestamp FROM ath_atl WHERE metric_type = 'ath'")
+    cursor.execute("SELECT value, timestamp FROM ath_atl WHERE type = 'ath'")
     ath_row = cursor.fetchone()
     if ath_row is None or current_total > ath_row[0]:
-        cursor.execute("INSERT OR REPLACE INTO ath_atl (metric_type, value, timestamp) VALUES ('ath', ?, ?)", (current_total, timestamp))
+        prev = None if ath_row is None else ath_row[0]
+        cursor.execute("INSERT OR REPLACE INTO ath_atl (type, value, timestamp) VALUES ('ath', ?, ?)", (current_total, timestamp))
         if ath_row is None:
             log_message(f"ATH initialized: {current_total} at {timestamp}")
         else:
             log_message(f"New ATH: {current_total} (was {ath_row[0]}) at {timestamp}")
+            alerts.alert_milestone('ath', current_total, prev)
 
-    cursor.execute("SELECT value, timestamp FROM ath_atl WHERE metric_type = 'atl'")
+    cursor.execute("SELECT value, timestamp FROM ath_atl WHERE type = 'atl'")
     atl_row = cursor.fetchone()
     if atl_row is None or current_total < atl_row[0]:
-        cursor.execute("INSERT OR REPLACE INTO ath_atl (metric_type, value, timestamp) VALUES ('atl', ?, ?)", (current_total, timestamp))
+        prev = None if atl_row is None else atl_row[0]
+        cursor.execute("INSERT OR REPLACE INTO ath_atl (type, value, timestamp) VALUES ('atl', ?, ?)", (current_total, timestamp))
         if atl_row is None:
             log_message(f"ATL initialized: {current_total} at {timestamp}")
         else:
             log_message(f"New ATL: {current_total} (was {atl_row[0]}) at {timestamp}")
+            alerts.alert_milestone('atl', current_total, prev)
 
 def log_message(msg):
     with open(LOG_FILE, "a") as f:
@@ -150,11 +154,14 @@ def track_failures(success):
             send_discord(f"🔴 **Provider poller failed {count} times consecutively** — check poll.log")
     return count
 
+import alerts
+
 if __name__ == "__main__":
     try:
         init_db()
         data = poll_api()
         store_data(data)
+        alerts.run_all()
         track_failures(True)
         log_message("Poll successful")
     except Exception as e:
