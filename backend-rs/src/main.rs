@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
             format!(
                 "sqlite://{}",
                 std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string()))
-                    .join("provider_tracking/providers.db")
+                    .join("urtrends/providers.db")
                     .display()
             )
         }

@@ -21,12 +21,12 @@ import requests
 from datetime import datetime, timezone
 from pathlib import Path
 
-BASE = Path.home() / "provider_tracking"
+BASE = Path.home() / "urtrends"
 DB_PATH = BASE / "providers.db"
 ENV_FILE = BASE / ".env"
 STATE_FILE = BASE / "alert_state.json"
 
-# Webhook is loaded from DISCORD_WEBHOOK_URL in .env (or /home/<user>/provider_tracking/.discord_webhook).
+# Webhook is loaded from DISCORD_WEBHOOK_URL in .env (or /home/<user>/urtrends/.discord_webhook).
 # Never hardcode secrets. Defaults to None; alerts are skipped if unset.
 DEFAULT_WEBHOOK = None
 

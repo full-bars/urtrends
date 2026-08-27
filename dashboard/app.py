@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 app = Flask(__name__)
-DB_PATH = Path.home() / "provider_tracking" / "providers.db"
+DB_PATH = Path.home() / "urtrends" / "providers.db"
 
 @app.after_request
 def add_no_cache(response):
