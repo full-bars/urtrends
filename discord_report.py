@@ -12,7 +12,7 @@ if not WEBHOOK_URL:
     print("Error: DISCORD_WEBHOOK_URL environment variable not set", file=sys.stderr)
     sys.exit(1)
 
-DB_PATH = Path.home() / "provider_tracking" / "providers.db"
+DB_PATH = Path.home() / "urtrends" / "providers.db"
 
 def get_db():
     conn = sqlite3.connect(str(DB_PATH))
