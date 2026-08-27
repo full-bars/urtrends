@@ -35,4 +35,4 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
-          files: backend-rs/target/release/provider_tracker
+          files: backend-rs/target/release/urtrends
